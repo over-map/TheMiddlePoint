@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>The Middle Point</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- MapLibre GL JS -->
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+    <!-- Turf.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <link href="./src/styles/main.css" rel="stylesheet" />
+</head>
+
+<body>
+
+    <div id="map"></div>
+
+    <div class="bauhaus-panel" id="ui-sheet">
+        <div class="panel-header" id="panel-toggle">
+            <h1 class="text-2xl md:text-3xl font-black text-[#254b42] uppercase tracking-tight">The Middle Point</h1>
+            <button class="toggle-btn" aria-label="Toggle Panel">
+                <i data-lucide="chevron-down" class="w-8 h-8 text-[#254b42]"></i>
+            </button>
+        </div>
+
+        <div class="panel-content space-y-5" id="panel-content">
+
+            <div id="locations-container" class="space-y-4">
+                <!-- Dynamic Person Inputs inserted here -->
+            </div>
+
+            <button id="add-person-btn" class="flex items-center gap-2 text-sm font-bold text-[#254b42] uppercase tracking-wider hover:underline">
+                <i data-lucide="plus-circle" class="w-5 h-5"></i> Add Person
+            </button>
+
+            <div id="results-metrics" class="hidden flex-row justify-between bg-[#d9ede8] border-[3px] border-[#254b42] p-3 rounded-xl shadow-[4px_4px_0px_#254b42] mt-4 mb-2">
+                <div class="text-center w-1/3 border-r-2 border-[#254b42]">
+                    <div class="text-[10px] font-black text-[#254b42] uppercase tracking-wider leading-none mb-1">RADIUS</div>
+                    <div id="metric-distance" class="text-base font-black text-[#254b42] leading-none">-- km</div>
+                </div>
+                <div class="text-center w-1/3 border-r-2 border-[#254b42]">
+                    <div class="text-[10px] font-black text-[#254b42] uppercase tracking-wider leading-none mb-1">WALK (EST)</div>
+                    <div id="metric-walking" class="text-base font-black text-[#254b42] leading-none">-- min</div>
+                </div>
+                <div class="text-center w-1/3">
+                    <div class="text-[10px] font-black text-[#254b42] uppercase tracking-wider leading-none mb-1">DRIVE (EST)</div>
+                    <div id="metric-driving" class="text-base font-black text-[#254b42] leading-none">-- min</div>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="error-message"
+            class="hidden text-[#254b42] font-bold text-sm text-center bg-[#FF6F61] border-[3px] border-[#254b42] p-3 rounded-xl shadow-[4px_4px_0px_#254b42] mt-4 mb-2">
+        </div>
+
+        <button id="find-btn" class="bauhaus-btn mt-4">
+            <span>Find Middle Point</span>
+        </button>
+    </div>
+
+    <script src="./src/scripts/app.js" defer></script>
+</body>
+
+</html>

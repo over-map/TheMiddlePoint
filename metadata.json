@@ -1,0 +1,5 @@
+{
+  "name": "The Middle Point",
+  "description": "Finds the fairest meeting spot based on a 15-minute walking travel time, suggesting cafes in the overlapping middle zone.",
+  "requestFramePermissions": []
+}
