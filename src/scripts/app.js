@@ -2,8 +2,6 @@
 lucide.createIcons();
 
 // Configuration
-const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6Ijg5NjNjMjMyMGU3YzQ2NDY5ZTI0MGNiYmIzMzMzNTI4IiwiaCI6Im11cm11cjY0In0='; // Replace with your OpenRouteService API Key
-
 let map;
 let markers = [];
 
@@ -222,35 +220,18 @@ function setupAutocomplete(inputEl, suggestionsEl) {
 
 // setupAutocomplete calls... will be handled dynamically 
 
-// 2a. Route (OpenRouteService) - For Driving Halfway
-async function getRoute(coordsA, coordsB) {
-    const res = await fetch(`https://api.openrouteservice.org/v2/directions/driving-car?api_key=${ORS_API_KEY}&start=${coordsA[0]},${coordsA[1]}&end=${coordsB[0]},${coordsB[1]}`);
-    if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error?.message || "Failed to fetch route. Locations might be too far or unreachable.");
-    }
-    const data = await res.json();
-    return data.features[0];
-}
 
-// 3. Find Venues (Overpass API)
+// 3. Find Venues (Geoapify Places API)
 async function findVenues(bbox) {
-    const overpassBbox = `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]}`;
-    // Added maxsize:1073741824 to allocate up to 1GB RAM on the Overpass servers for large bbox queries
-    const query = `
-    [out:json][timeout:90][maxsize:1073741824];
-    (
-      node["amenity"="cafe"](${overpassBbox});
-      node["amenity"="restaurant"](${overpassBbox});
-      node["amenity"="bar"](${overpassBbox});
-    );
-    out body;
-`;
+    const minLon = bbox[0];
+    const minLat = bbox[1];
+    const maxLon = bbox[2];
+    const maxLat = bbox[3];
+    
+    // Using categories: catering.cafe, catering.restaurant, catering.bar to replace Overpass amenities
+    const url = `https://api.geoapify.com/v2/places?categories=catering.cafe,catering.restaurant,catering.bar&filter=rect:${minLon},${minLat},${maxLon},${maxLat}&limit=50&apiKey=b1d0ba2ef4d846ab960edad17da0d2bd`;
 
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: query
-    });
+    const res = await fetch(url);
 
     if (!res.ok) throw new Error("Failed to fetch venues. Try again please");
     return await res.json();
@@ -315,7 +296,7 @@ btn.addEventListener('click', async () => {
         }
         
         // Radius needs to scale to furthest pair to ensure any intersection exists.
-        // Capped at 10km to safely prevent Overpass API from scanning too many nodes and timing out.
+        // Capped at 10km to safely prevent the Places API from timing out.
         const radius = Math.min((maxPairwiseDist / 2) + 0.25, 10);
         
         for (let i = 0; i < locationsData.length; i++) {
@@ -372,7 +353,7 @@ btn.addEventListener('click', async () => {
 
         searchBbox = turf.bbox(searchArea);
         
-        // If bounding box is incredibly large, Overpass will still fail even with 90s/1GB.
+        // If bounding box is incredibly large, the Places API might fail.
         // We'll restrict the area being searched to a max threshold if it is excessive.
         // However, since we define "middle point", if it's large, they are very far.
         const searchAreaSquareKm = turf.area(searchArea) / 1000000;
@@ -388,34 +369,37 @@ btn.addEventListener('click', async () => {
         let venuesFound = 0;
 
         // Step 5: Render Venues
-        venues.elements.forEach(venue => {
-            if (!venue.lon || !venue.lat) return;
-            const pt = turf.point([venue.lon, venue.lat]);
-            if (turf.booleanPointInPolygon(pt, searchArea)) {
-                venuesFound++;
-
-                const el = document.createElement('div');
-                el.className = 'cafe-marker';
+        if (venues.features) {
+            venues.features.forEach(venue => {
+                const lon = venue.properties.lon;
+                const lat = venue.properties.lat;
+                if (lon === undefined || lat === undefined) return;
                 
-                // Let's remove the lucide icons, making them just dots.
-                // el.innerHTML = `<i data-lucide="${iconName}" style="width:10px;height:10px;"></i>`;
+                const pt = turf.point([lon, lat]);
+                if (turf.booleanPointInPolygon(pt, searchArea)) {
+                    venuesFound++;
 
-                const venueName = venue.tags.name || 'Unnamed ' + venue.tags.amenity;
-                // Search using name near the precise coordinates and zoom in
-                const gmapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(venueName)}/@${venue.lat},${venue.lon},17z`;
-                
-                const popup = new maplibregl.Popup({ offset: 10, closeButton: false })
-                    .setHTML(`<a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer" style="font-size:14px;text-transform:uppercase;color:#000;text-decoration:underline;font-weight:900;display:block;">${venueName}</a>
-                              <div style="font-size:10px;text-transform:uppercase;color:#666;margin-top:2px;">${venue.tags.amenity}</div>`);
+                    const el = document.createElement('div');
+                    el.className = 'cafe-marker';
 
-                const marker = new maplibregl.Marker({ element: el })
-                    .setLngLat([venue.lon, venue.lat])
-                    .setPopup(popup)
-                    .addTo(map);
+                    const categoryName = venue.properties.categories ? venue.properties.categories[0].split('.').pop() : 'venue';
+                    const venueName = venue.properties.name || 'Unnamed ' + categoryName;
+                    
+                    const gmapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(venueName)}/@${lat},${lon},17z`;
+                    
+                    const popup = new maplibregl.Popup({ offset: 10, closeButton: false })
+                        .setHTML(`<a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer" style="font-size:14px;text-transform:uppercase;color:#000;text-decoration:underline;font-weight:900;display:block;">${venueName}</a>
+                                  <div style="font-size:10px;text-transform:uppercase;color:#666;margin-top:2px;">${categoryName}</div>`);
 
-                markers.push(marker);
-            }
-        });
+                    const marker = new maplibregl.Marker({ element: el })
+                        .setLngLat([lon, lat])
+                        .setPopup(popup)
+                        .addTo(map);
+
+                    markers.push(marker);
+                }
+            });
+        }
 
         lucide.createIcons();
 
