@@ -133,7 +133,12 @@ function clearMap() {
     const style = map.getStyle();
     if (style && style.layers) {
         style.layers.forEach(l => {
-            if (l.id.startsWith('circle-') || l.id.startsWith('intersection-') || l.id.startsWith('route-line-')) {
+            if (
+                l.id.startsWith('circle-') ||
+                l.id.startsWith('intersection-') ||
+                l.id.startsWith('route-line-') ||
+                l.id.startsWith('cafes-')
+            ) {
                 map.removeLayer(l.id);
             }
         });
@@ -142,12 +147,13 @@ function clearMap() {
     const sources = map.getStyle()?.sources;
     if (sources) {
         Object.keys(sources).forEach(s => {
-            if (s.startsWith('circle-') || s === 'intersection' || s.startsWith('route-')) {
+            if (s.startsWith('circle-') || s === 'intersection' || s.startsWith('route-') || s === 'cafes-data') {
                 map.removeSource(s);
             }
         });
     }
 
+    // Remove any remaining person-pin HTML markers
     markers.forEach(m => m.remove());
     markers = [];
 
@@ -404,42 +410,84 @@ btn.addEventListener('click', async () => {
         // Step 4: Find Venues
         const venues = await findVenues(searchBbox);
 
+        // Step 5: Render Venues as native GL layers (60fps, no DOM lag)
         let venuesFound = 0;
-
-        // Step 5: Render Venues
         if (venues.features) {
-            venues.features.forEach(venue => {
-                const lon = venue.properties.lon;
-                const lat = venue.properties.lat;
-                if (lon === undefined || lat === undefined) return;
-                
-                const pt = turf.point([lon, lat]);
-                if (turf.booleanPointInPolygon(pt, searchArea)) {
-                    venuesFound++;
-
-                    const el = document.createElement('div');
-                    el.className = 'cafe-marker';
-
-                    const categoryName = venue.properties.categories ? venue.properties.categories[0].split('.').pop() : 'venue';
-                    const venueName = venue.properties.name || 'Unnamed ' + categoryName;
-                    
-                    const gmapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(venueName)}/@${lat},${lon},17z`;
-                    
-                    const popup = new maplibregl.Popup({ offset: 10, closeButton: false })
-                        .setHTML(`<a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer" style="font-size:14px;text-transform:uppercase;color:#000;text-decoration:underline;font-weight:900;display:block;">${venueName}</a>
-                                  <div style="font-size:10px;text-transform:uppercase;color:#666;margin-top:2px;">${categoryName}</div>`);
-
-                    const marker = new maplibregl.Marker({ element: el })
-                        .setLngLat([lon, lat])
-                        .setPopup(popup)
-                        .addTo(map);
-
-                    markers.push(marker);
-                }
+            // Filter only venues that fall inside the intersection polygon
+            const inZone = venues.features.filter(f => {
+                const lon = f.properties.lon;
+                const lat = f.properties.lat;
+                if (lon === undefined || lat === undefined) return false;
+                return turf.booleanPointInPolygon(turf.point([lon, lat]), searchArea);
             });
-        }
 
-        lucide.createIcons();
+            venuesFound = inZone.length;
+
+            if (venuesFound > 0) {
+                // Build a clean FeatureCollection with only the properties we need
+                const cafesGeoJSON = {
+                    type: 'FeatureCollection',
+                    features: inZone.map(f => ({
+                        type: 'Feature',
+                        geometry: { type: 'Point', coordinates: [f.properties.lon, f.properties.lat] },
+                        properties: {
+                            name: f.properties.name || ('Unnamed ' + (f.properties.categories?.[0]?.split('.').pop() ?? 'venue')),
+                            category: f.properties.categories?.[0]?.split('.').pop() ?? 'venue',
+                            lon: f.properties.lon,
+                            lat: f.properties.lat
+                        }
+                    }))
+                };
+
+                // Feed the whole dataset as a single GPU-managed source
+                map.addSource('cafes-data', { type: 'geojson', data: cafesGeoJSON });
+
+                // Shadow layer — slightly larger, dark, offset so it sits below the dot
+                map.addLayer({
+                    id: 'cafes-shadow',
+                    type: 'circle',
+                    source: 'cafes-data',
+                    paint: {
+                        'circle-radius': 9,
+                        'circle-color': '#000000',
+                        'circle-opacity': 0.20,
+                        'circle-translate': [2, 3]   // px offset → fake drop shadow
+                    }
+                });
+
+                // Main Bauhaus marker — bright yellow with thick black stroke
+                map.addLayer({
+                    id: 'cafes-marker',
+                    type: 'circle',
+                    source: 'cafes-data',
+                    paint: {
+                        'circle-radius': 7,
+                        'circle-color': '#F5C518',   // Bauhaus yellow
+                        'circle-stroke-width': 2,
+                        'circle-stroke-color': '#254b42'
+                    }
+                });
+
+                // Pointer cursor on hover
+                map.on('mouseenter', 'cafes-marker', () => { map.getCanvas().style.cursor = 'pointer'; });
+                map.on('mouseleave', 'cafes-marker', () => { map.getCanvas().style.cursor = ''; });
+
+                // Click → popup (replaces the old DOM addEventListener approach)
+                map.on('click', 'cafes-marker', (e) => {
+                    const props = e.features[0].properties;
+                    const gmapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(props.name)}/@${props.lat},${props.lon},17z`;
+                    new maplibregl.Popup({ offset: 12, closeButton: false })
+                        .setLngLat(e.features[0].geometry.coordinates)
+                        .setHTML(`
+                            <a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer"
+                               style="font-size:14px;text-transform:uppercase;color:#000;text-decoration:underline;font-weight:900;display:block;">
+                               ${props.name}
+                            </a>
+                            <div style="font-size:10px;text-transform:uppercase;color:#666;margin-top:2px;">${props.category}</div>`)
+                        .addTo(map);
+                });
+            }
+        }
 
         if (venuesFound === 0) {
             showError("No venues here. Try different locations");
