@@ -293,6 +293,8 @@ btn.addEventListener('click', async () => {
         map.fitBounds(bounds, { padding: 100, duration: 1000 });
 
         let isolines = [];
+        let searchArea = null;
+        let searchBbox = null;
 
         // Unified Radius Calculation
         // Measure furthest distance between any two locations to ensure overlap
@@ -304,15 +306,55 @@ btn.addEventListener('click', async () => {
             }
         }
         
-        // Radius needs to scale to furthest pair to ensure any intersection exists.
-        // Capped at 10km to safely prevent the Places API from timing out.
-        const radius = Math.min((maxPairwiseDist / 2) + 0.25, 10);
-        
-        // Fetch isolines concurrently
-        const isolinePromises = locationsData.map(loc => getIsoline(loc.coords, radius * 1000));
-        isolines = await Promise.all(isolinePromises);
+        // Initial radius: half the furthest distance + buffer, min 0.5km
+        const MAX_RADIUS_KM = 15;
+        const MAX_RETRIES = 5;
+        const EXPAND_FACTOR = 1.20; // grow by 20% each retry
+        let radius = Math.max((maxPairwiseDist / 2) + 0.25, 0.5);
 
-        // Update UI Metrics
+        // Retry loop — expand radius until isolines overlap or cap is hit
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            const cappedRadius = Math.min(radius, MAX_RADIUS_KM);
+
+            if (attempt > 1) {
+                btn.innerHTML = `<div class="loader"></div><span>Expanding search (${attempt}/${MAX_RETRIES})…</span>`;
+                // Remove existing isoline layers/sources before re-rendering
+                clearMap();
+                // Re-add person markers after clearMap
+                for (let i = 0; i < locationsData.length; i++) {
+                    const el = document.createElement('div');
+                    el.className = 'person-marker';
+                    el.style.backgroundColor = locationsData[i].color;
+                    markers.push(new maplibregl.Marker({ element: el }).setLngLat(locationsData[i].coords).addTo(map));
+                }
+            }
+
+            // Fetch all isolines concurrently for this radius
+            const isolinePromises = locationsData.map(loc => getIsoline(loc.coords, cappedRadius * 1000));
+            isolines = await Promise.all(isolinePromises);
+
+            // Compute intersection recursively
+            let candidate = isolines[0];
+            for (let i = 1; i < isolines.length; i++) {
+                candidate = turf.intersect(candidate, isolines[i]);
+                if (!candidate) break;
+            }
+
+            if (candidate) {
+                searchArea = candidate;
+                radius = cappedRadius; // lock in the radius that worked
+                break;
+            }
+
+            if (cappedRadius >= MAX_RADIUS_KM) break; // already at ceiling
+            radius *= EXPAND_FACTOR;
+        }
+
+        if (!searchArea) {
+            throw new Error("Locations are too far apart to find a shared meeting zone. Try closer locations.");
+        }
+
+        // Update UI Metrics with the final radius that achieved overlap
         const walkTime = Math.round((radius / 5) * 60); // 5km/h walking
         const driveTime = Math.round((radius / 30) * 60); // 30km/h driving
         
@@ -324,7 +366,7 @@ btn.addEventListener('click', async () => {
         metricsContainer.classList.remove('hidden');
         metricsContainer.classList.add('flex');
 
-        // Render isolines dynamically
+        // Render the confirmed isolines
         for (let i = 0; i < isolines.length; i++) {
             const sourceId = `circle-${i}`; // Keep circle ID to maintain `clearMap` compatibility
             const color = locationsData[i].color;
@@ -338,22 +380,7 @@ btn.addEventListener('click', async () => {
             });
         }
 
-        let searchArea, searchBbox;
-
-        // Compute Intersection recursively
-        searchArea = isolines[0];
-        for (let i = 1; i < isolines.length; i++) {
-            searchArea = turf.intersect(searchArea, isolines[i]);
-            if (!searchArea) break;
-        }
-
-        if (!searchArea) {
-            throw new Error("No overlapping zone for all persons. Try locations closer to each other, or a different travel mode.");
-        }
-
-        // We still need to compute the intersection to find the venue bounding box,
-        // The overlapping 0.4 opacity circles above naturally create the intersection visually,
-        // but we explicitly add a red dashed outline to highlight the exact search boundary.
+        // Draw dashed outline of the confirmed intersection zone
         map.addSource('intersection', { type: 'geojson', data: searchArea });
         map.addLayer({
             id: 'intersection-line',
