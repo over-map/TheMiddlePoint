@@ -137,7 +137,8 @@ function clearMap() {
                 l.id.startsWith('circle-') ||
                 l.id.startsWith('intersection-') ||
                 l.id.startsWith('route-line-') ||
-                l.id.startsWith('cafes-')
+                l.id.startsWith('cafes-') ||
+                l.id.startsWith('persons-')
             ) {
                 map.removeLayer(l.id);
             }
@@ -147,13 +148,19 @@ function clearMap() {
     const sources = map.getStyle()?.sources;
     if (sources) {
         Object.keys(sources).forEach(s => {
-            if (s.startsWith('circle-') || s === 'intersection' || s.startsWith('route-') || s === 'cafes-data') {
+            if (
+                s.startsWith('circle-') ||
+                s === 'intersection' ||
+                s.startsWith('route-') ||
+                s === 'cafes-data' ||
+                s === 'persons-data'
+            ) {
                 map.removeSource(s);
             }
         });
     }
 
-    // Remove any remaining person-pin HTML markers
+    // markers array is now only used as a fallback; keep the reset
     markers.forEach(m => m.remove());
     markers = [];
 
@@ -283,20 +290,61 @@ btn.addEventListener('click', async () => {
     clearMap();
 
     try {
-        // Step 1: Geocode
+        // Step 1: Geocode all locations
         const bounds = new maplibregl.LngLatBounds();
         
         for (let i = 0; i < locationsData.length; i++) {
             locationsData[i].coords = await geocode(locationsData[i].address);
             bounds.extend(locationsData[i].coords);
-            
-            const el = document.createElement('div');
-            el.className = 'person-marker';
-            el.style.backgroundColor = locationsData[i].color;
-            markers.push(new maplibregl.Marker({ element: el }).setLngLat(locationsData[i].coords).addTo(map));
         }
 
         map.fitBounds(bounds, { padding: 100, duration: 1000 });
+
+        // Render person-pin markers as a single GL layer (no DOM, no lag)
+        const renderPersonPins = () => {
+            // Clean up any existing persons layer/source first
+            if (map.getLayer('persons-shadow')) map.removeLayer('persons-shadow');
+            if (map.getLayer('persons-pin')) map.removeLayer('persons-pin');
+            if (map.getSource('persons-data')) map.removeSource('persons-data');
+
+            const personsGeoJSON = {
+                type: 'FeatureCollection',
+                features: locationsData.map(loc => ({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: loc.coords },
+                    properties: { color: loc.color, letter: loc.letter }
+                }))
+            };
+            map.addSource('persons-data', { type: 'geojson', data: personsGeoJSON });
+
+            // Shadow
+            map.addLayer({
+                id: 'persons-shadow',
+                type: 'circle',
+                source: 'persons-data',
+                paint: {
+                    'circle-radius': 12,
+                    'circle-color': '#000000',
+                    'circle-opacity': 0.20,
+                    'circle-translate': [2, 3]
+                }
+            });
+
+            // Pin — color driven by the per-feature 'color' property
+            map.addLayer({
+                id: 'persons-pin',
+                type: 'circle',
+                source: 'persons-data',
+                paint: {
+                    'circle-radius': 10,
+                    'circle-color': ['get', 'color'],
+                    'circle-stroke-width': 2.5,
+                    'circle-stroke-color': '#ffffff'
+                }
+            });
+        };
+
+        renderPersonPins();
 
         let isolines = [];
         let searchArea = null;
@@ -326,13 +374,8 @@ btn.addEventListener('click', async () => {
                 btn.innerHTML = `<div class="loader"></div><span>Expanding search (${attempt}/${MAX_RETRIES})…</span>`;
                 // Remove existing isoline layers/sources before re-rendering
                 clearMap();
-                // Re-add person markers after clearMap
-                for (let i = 0; i < locationsData.length; i++) {
-                    const el = document.createElement('div');
-                    el.className = 'person-marker';
-                    el.style.backgroundColor = locationsData[i].color;
-                    markers.push(new maplibregl.Marker({ element: el }).setLngLat(locationsData[i].coords).addTo(map));
-                }
+                // Re-add person pins (GL layer) after clearMap wiped them
+                renderPersonPins();
             }
 
             // Fetch all isolines concurrently for this radius
