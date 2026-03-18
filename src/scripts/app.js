@@ -237,6 +237,16 @@ async function findVenues(bbox) {
     return await res.json();
 }
 
+// 4. Find Isochrones (Geoapify Isolines API)
+async function getIsoline(coords, radiusInMeters) {
+    const url = `https://api.geoapify.com/v1/isoline?lat=${coords[1]}&lon=${coords[0]}&type=distance&mode=walk&range=${Math.round(radiusInMeters)}&apiKey=b1d0ba2ef4d846ab960edad17da0d2bd`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to calculate isochrones. Location might be unreachable.");
+    
+    const data = await res.json();
+    return data.features[0];
+}
+
 // Main Logic
 btn.addEventListener('click', async () => {
     if (!map) return;
@@ -282,8 +292,7 @@ btn.addEventListener('click', async () => {
 
         map.fitBounds(bounds, { padding: 100, duration: 1000 });
 
-        let searchArea, searchBbox;
-        let circles = [];
+        let isolines = [];
 
         // Unified Radius Calculation
         // Measure furthest distance between any two locations to ensure overlap
@@ -299,9 +308,9 @@ btn.addEventListener('click', async () => {
         // Capped at 10km to safely prevent the Places API from timing out.
         const radius = Math.min((maxPairwiseDist / 2) + 0.25, 10);
         
-        for (let i = 0; i < locationsData.length; i++) {
-            circles.push(turf.circle(locationsData[i].coords, radius, {units: 'kilometers', steps: 64}));
-        }
+        // Fetch isolines concurrently
+        const isolinePromises = locationsData.map(loc => getIsoline(loc.coords, radius * 1000));
+        isolines = await Promise.all(isolinePromises);
 
         // Update UI Metrics
         const walkTime = Math.round((radius / 5) * 60); // 5km/h walking
@@ -315,12 +324,12 @@ btn.addEventListener('click', async () => {
         metricsContainer.classList.remove('hidden');
         metricsContainer.classList.add('flex');
 
-        // Render circles dynamically
-        for (let i = 0; i < circles.length; i++) {
-            const sourceId = `circle-${i}`;
+        // Render isolines dynamically
+        for (let i = 0; i < isolines.length; i++) {
+            const sourceId = `circle-${i}`; // Keep circle ID to maintain `clearMap` compatibility
             const color = locationsData[i].color;
             
-            map.addSource(sourceId, { type: 'geojson', data: circles[i] });
+            map.addSource(sourceId, { type: 'geojson', data: isolines[i] });
             map.addLayer({
                 id: `${sourceId}-fill`,
                 type: 'fill',
@@ -329,10 +338,12 @@ btn.addEventListener('click', async () => {
             });
         }
 
+        let searchArea, searchBbox;
+
         // Compute Intersection recursively
-        searchArea = circles[0];
-        for (let i = 1; i < circles.length; i++) {
-            searchArea = turf.intersect(searchArea, circles[i]);
+        searchArea = isolines[0];
+        for (let i = 1; i < isolines.length; i++) {
+            searchArea = turf.intersect(searchArea, isolines[i]);
             if (!searchArea) break;
         }
 
